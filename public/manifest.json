@@ -1,0 +1,28 @@
+{
+  "short_name": "lifegame",
+  "name": "lifegame",
+  "description": "Define tasks you want to stay consistent with.",
+  "id": "/pwa-lifegame/",
+  "start_url": "/pwa-lifegame/",
+  "scope": "/pwa-lifegame/",
+  "display": "standalone",
+  "theme_color": "#fefefe",
+  "background_color": "#fefefe",
+  "icons": [
+    {
+      "src": "https://fakeimg.pl/16x16/fde047/000/?font=bebas&font_size=16&text=L",
+      "sizes": "16x16",
+      "type": "image/x-icon"
+    },
+    {
+      "src": "https://fakeimg.pl/192x192/fde047/000/?font=bebas&font_size=192&text=L",
+      "type": "image/png",
+      "sizes": "192x192"
+    },
+    {
+      "src": "https://fakeimg.pl/512x512/fde047/000/?font=bebas&font_size=512&text=L",
+      "type": "image/png",
+      "sizes": "512x512"
+    }
+  ]
+}
