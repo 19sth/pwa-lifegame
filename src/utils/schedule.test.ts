@@ -9,6 +9,8 @@ import {
   metPartCount,
   scoreDay,
   streakCopy,
+  streakSummary,
+  successSummary,
   weekLine,
   currentWeek,
 } from "./schedule";
@@ -299,5 +301,155 @@ describe("cleanSchedule", () => {
       kind: "nPerWeek",
       daysPerWeek: 7,
     });
+  });
+});
+
+function logsFor(taskId: number, dates: string[]): CompletionLog[] {
+  return dates.map((date) => log(date, { taskId }));
+}
+
+describe("successSummary", () => {
+  it("mixes daily and weekday tasks and leaves an unmet today out", () => {
+    const daily = task({ id: 1, createdOn: "2026-11-02", schedule: { kind: "daily" } });
+    const weekdays = task({
+      id: 2,
+      name: "Lift",
+      createdOn: "2026-11-02",
+      schedule: { kind: "weekdays", weekdays: [1, 3, 5] },
+    });
+    const logs = [
+      ...logsFor(1, ["2026-11-02", "2026-11-03", "2026-11-04"]),
+      ...logsFor(2, ["2026-11-02", "2026-11-04"]),
+    ];
+    expect(successSummary([daily, weekdays], logs, "2026-11-06")).toEqual({
+      completed: 5,
+      due: 6,
+      percent: 83,
+    });
+  });
+
+  it("counts today once it is met", () => {
+    const daily = task({ createdOn: "2026-11-06", schedule: { kind: "daily" } });
+    expect(successSummary([daily], [], "2026-11-06")).toEqual({
+      completed: 0,
+      due: 0,
+      percent: null,
+    });
+    expect(successSummary([daily], [log("2026-11-06")], "2026-11-06")).toEqual({
+      completed: 1,
+      due: 1,
+      percent: 100,
+    });
+  });
+
+  it("credits an open n-per-week week without charging the days still left", () => {
+    const item = task({
+      createdOn: "2026-11-02",
+      schedule: { kind: "nPerWeek", daysPerWeek: 3 },
+    });
+    expect(successSummary([item], [log("2026-11-02")], "2026-11-06")).toEqual({
+      completed: 1,
+      due: 1,
+      percent: 100,
+    });
+  });
+
+  it("scores a closed n-per-week week as met days out of the quota", () => {
+    const item = task({
+      createdOn: "2026-11-02",
+      schedule: { kind: "nPerWeek", daysPerWeek: 3 },
+    });
+    expect(successSummary([item], [log("2026-11-02")], "2026-11-09")).toEqual({
+      completed: 1,
+      due: 3,
+      percent: 33,
+    });
+  });
+
+  it("ignores a partial first week that cannot fit the quota", () => {
+    const item = task({
+      createdOn: "2026-11-07",
+      schedule: { kind: "nPerWeek", daysPerWeek: 3 },
+    });
+    expect(successSummary([item], [], "2026-11-07")).toEqual({
+      completed: 0,
+      due: 0,
+      percent: null,
+    });
+  });
+
+  it("shows a real zero when a closed week was missed entirely", () => {
+    const item = task({
+      createdOn: "2026-11-02",
+      schedule: { kind: "nPerWeek", daysPerWeek: 2 },
+    });
+    expect(successSummary([item], [], "2026-11-09").percent).toBe(0);
+  });
+});
+
+describe("streakSummary", () => {
+  it("skips days with no hard obligation and does not break on an open today", () => {
+    const weekdays = task({
+      createdOn: "2026-11-02",
+      schedule: { kind: "weekdays", weekdays: [1, 3, 5] },
+    });
+    const summary = streakSummary(
+      [weekdays],
+      [log("2026-11-02"), log("2026-11-04")],
+      "2026-11-06"
+    );
+    expect(summary).toEqual({ days: 2, activeTasks: 1, totalTasks: 1 });
+  });
+
+  it("skips today when one task is still open and counts the days before it", () => {
+    const first = task({ id: 1, createdOn: "2026-11-02", schedule: { kind: "daily" } });
+    const second = task({ id: 2, name: "Walk", createdOn: "2026-11-02", schedule: { kind: "daily" } });
+    const logs = [
+      ...logsFor(1, ["2026-11-02", "2026-11-03", "2026-11-04"]),
+      ...logsFor(2, ["2026-11-02", "2026-11-03"]),
+    ];
+    expect(streakSummary([first, second], logs, "2026-11-04").days).toBe(2);
+  });
+
+  it("does not let an unlogged n-per-week day break the daily streak", () => {
+    const daily = task({ id: 1, createdOn: "2026-11-02", schedule: { kind: "daily" } });
+    const flexible = task({
+      id: 2,
+      name: "Read",
+      createdOn: "2026-11-02",
+      schedule: { kind: "nPerWeek", daysPerWeek: 2 },
+    });
+    const logs = logsFor(1, ["2026-11-02", "2026-11-03", "2026-11-04", "2026-11-05", "2026-11-06"]);
+    const summary = streakSummary([daily, flexible], logs, "2026-11-06");
+    expect(summary.days).toBe(5);
+    expect(summary.activeTasks).toBe(1);
+    expect(summary.totalTasks).toBe(2);
+  });
+
+  it("is zero while any task streak is broken, then counts the run after a restart", () => {
+    const daily = task({ createdOn: "2026-11-02", schedule: { kind: "daily" } });
+    const logs = [log("2026-11-02"), log("2026-11-03"), log("2026-11-05"), log("2026-11-06")];
+    expect(streakSummary([daily], logs, "2026-11-06").days).toBe(0);
+    const restarted = { ...daily, streakAnchor: "2026-11-05" };
+    expect(streakSummary([restarted], logs, "2026-11-06").days).toBe(2);
+  });
+
+  it("is zero when an n-per-week task has already broken", () => {
+    const daily = task({ id: 1, createdOn: "2026-11-02", schedule: { kind: "daily" } });
+    const flexible = task({
+      id: 2,
+      name: "Read",
+      createdOn: "2026-11-02",
+      schedule: { kind: "nPerWeek", daysPerWeek: 6 },
+    });
+    const logs = logsFor(1, [
+      "2026-11-02",
+      "2026-11-03",
+      "2026-11-04",
+      "2026-11-05",
+      "2026-11-06",
+      "2026-11-07",
+    ]);
+    expect(streakSummary([daily, flexible], logs, "2026-11-07").days).toBe(0);
   });
 });

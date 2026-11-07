@@ -3,6 +3,7 @@ import "./App.css";
 import MuImportExport from "./components/muimportexport";
 import MuLayout from "./components/mulayout";
 import Main from "./pages/main";
+import TaskAdd from "./pages/taskadd";
 import TaskDetail from "./pages/taskdetail";
 import { useEffect } from "react";
 import { registerServiceWorker } from "./serviceWorkerRegistration";
@@ -19,6 +20,7 @@ function App() {
         <Route path="/" element={<Navigate to={`${BASE_PATH}/`} replace />} />
         <Route path={`${BASE_PATH}/`} element={<MuLayout />}>
           <Route index element={<Main />} />
+          <Route path="add" element={<TaskAdd />} />
           <Route path="task/:id" element={<TaskDetail />} />
           <Route path="importexport" element={<MuImportExport />} />
         </Route>
