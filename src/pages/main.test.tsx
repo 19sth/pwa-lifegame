@@ -1,5 +1,5 @@
 import { configureStore } from "@reduxjs/toolkit";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { subDays } from "date-fns";
 import { Provider } from "react-redux";
@@ -33,22 +33,60 @@ function renderMain(state?: { tasks?: TasksState; logs?: LogsState }) {
 
 const epoch = new Date(0).toISOString();
 
+function taskState(tasks: Task[], logs: LogsState["logs"] = []): { tasks: TasksState; logs: LogsState } {
+  return {
+    tasks: { tasks, notificationMessage: "", notificationIsoDt: epoch },
+    logs: { logs, notificationMessage: "", notificationIsoDt: epoch },
+  };
+}
+
 describe("main screen", () => {
-  it("adds a daily task and logs it from the list", async () => {
-    renderMain();
-    await userEvent.type(screen.getByLabelText("New task"), "floss");
-    await userEvent.click(screen.getByRole("button", { name: "Add" }));
-    expect(screen.getByText("Floss")).toBeInTheDocument();
-    expect(screen.getByText(/Every day, once a day/)).toBeInTheDocument();
+  it("points an empty list at the add page", async () => {
+    const store = renderMain();
+    expect(screen.queryByLabelText("New task")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Type a name and add it/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Every day, once a day/)).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Add a task." })).toHaveAttribute(
+      "href",
+      "/pwa-lifegame/add"
+    );
+    await waitFor(() => {
+      expect(store.getState().page.navItems).toEqual([
+        { icon: "ImportExport", link: "/pwa-lifegame/importexport" },
+        { icon: "Add", link: "/pwa-lifegame/add" },
+      ]);
+    });
+  });
+
+  it("logs a task and shows the success and streak summaries", async () => {
+    const today = toDayKey(new Date());
+    const item: Task = {
+      id: 1,
+      name: "Floss",
+      color: "#fff4b3",
+      createdOn: today,
+      schedule: { kind: "daily" },
+      timesPerDay: 1,
+      subtasks: [],
+      streakAnchor: null,
+    };
+    renderMain(taskState([item]));
+    expect(screen.getByTestId("success-summary")).toHaveTextContent("—");
+    expect(screen.getByTestId("success-summary")).toHaveTextContent("No scheduled days yet.");
+    expect(screen.getByTestId("streak-summary")).toHaveTextContent("No streak yet");
+    expect(screen.getByTestId("streak-summary")).toHaveTextContent("0 of 1 tasks on a streak");
+
     await userEvent.click(screen.getByRole("button", { name: "Log one Floss" }));
     expect(screen.getByText("Done today")).toBeInTheDocument();
-    expect(screen.getByText("1 day")).toBeInTheDocument();
+    expect(screen.getByTestId("success-summary")).toHaveTextContent("100%");
+    expect(screen.getByTestId("success-summary")).toHaveTextContent("1 of 1 scheduled days");
+    expect(screen.getByTestId("streak-summary")).toHaveTextContent("1 of 1 tasks on a streak");
   });
 
   it("shows a broken streak, the length that was lost, and a way to start again", async () => {
     const created = toDayKey(subDays(new Date(), 3));
     const second = toDayKey(subDays(new Date(), 2));
-    const task: Task = {
+    const item: Task = {
       id: 1,
       name: "Read",
       color: "#fff4b3",
@@ -58,30 +96,26 @@ describe("main screen", () => {
       subtasks: [],
       streakAnchor: null,
     };
-    renderMain({
-      tasks: {
-        tasks: [task],
-        notificationMessage: "",
-        notificationIsoDt: epoch,
-      },
-      logs: {
-        logs: [
+    renderMain(
+      taskState(
+        [item],
+        [
           { taskId: 1, subtaskId: null, date: created, count: 1 },
           { taskId: 1, subtaskId: null, date: second, count: 1 },
-        ],
-        notificationMessage: "",
-        notificationIsoDt: epoch,
-      },
-    });
+        ]
+      )
+    );
 
     const broken = screen.getByTestId("streak-broken");
     expect(broken).toHaveTextContent("Streak broken");
     expect(broken).toHaveTextContent("Last streak was 2 days");
     expect(broken).not.toHaveTextContent(/^0 days$/);
     expect(screen.queryByText("Nothing scheduled today.")).not.toBeInTheDocument();
+    expect(screen.getByTestId("streak-summary")).toHaveTextContent("0");
+    expect(screen.getByTestId("streak-summary")).toHaveTextContent("No streak yet");
 
     await userEvent.click(screen.getByRole("button", { name: "Start again" }));
     expect(screen.queryByTestId("streak-broken")).not.toBeInTheDocument();
-    expect(screen.getByText("No streak yet")).toBeInTheDocument();
+    expect(screen.getAllByText("No streak yet").length).toBeGreaterThan(0);
   });
 });

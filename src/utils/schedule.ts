@@ -471,6 +471,126 @@ export function streakCopy(streak: Streak): { headline: string; detail: string }
   return { headline: plural(streak.current), detail: "Current streak" };
 }
 
+export interface SuccessSummary {
+  completed: number;
+  due: number;
+  percent: number | null;
+}
+
+export interface StreakSummary {
+  days: number;
+  activeTasks: number;
+  totalTasks: number;
+}
+
+function countDaySuccess(
+  task: Task,
+  logs: CompletionLog[],
+  todayKey: string
+): { completed: number; due: number } {
+  let completed = 0;
+  let due = 0;
+  if (task.createdOn > todayKey) return { completed, due };
+  for (const day of eachDay(task.createdOn, todayKey)) {
+    const score = scoreDay(task, logs, day);
+    if (!score.scheduled) continue;
+    if (day === todayKey && !score.met) continue;
+    due += 1;
+    if (score.met) completed += 1;
+  }
+  return { completed, due };
+}
+
+function countWeekSuccess(
+  task: Task,
+  logs: CompletionLog[],
+  todayKey: string
+): { completed: number; due: number } {
+  let completed = 0;
+  let due = 0;
+  if (task.createdOn > todayKey) return { completed, due };
+  for (const weekStart of weeksCovering(task.createdOn, todayKey)) {
+    const week = evaluateWeek(task, logs, weekStart, todayKey, task.createdOn);
+    if (week.state === "ignored") continue;
+    if (week.state === "open") {
+      completed += week.metDays;
+      due += week.metDays;
+      continue;
+    }
+    due += week.required;
+    completed += Math.min(week.metDays, week.required);
+  }
+  return { completed, due };
+}
+
+export function successSummary(
+  tasks: Task[],
+  logs: CompletionLog[],
+  todayKey: string
+): SuccessSummary {
+  let completed = 0;
+  let due = 0;
+  for (const task of tasks) {
+    const part =
+      task.schedule.kind === "nPerWeek"
+        ? countWeekSuccess(task, logs, todayKey)
+        : countDaySuccess(task, logs, todayKey);
+    completed += part.completed;
+    due += part.due;
+  }
+  return {
+    completed,
+    due,
+    percent: due === 0 ? null : Math.round((completed / due) * 100),
+  };
+}
+
+function hasHardObligation(task: Task, dayKey: string): boolean {
+  if (task.schedule.kind === "nPerWeek") return false;
+  if (task.createdOn > dayKey) return false;
+  return isDayScheduled(task.schedule, fromDayKey(dayKey));
+}
+
+export function streakSummary(
+  tasks: Task[],
+  logs: CompletionLog[],
+  todayKey: string
+): StreakSummary {
+  const totalTasks = tasks.length;
+  const activeTasks = tasks.filter(
+    (task) => evaluateStreak(task, logs, todayKey).status === "active"
+  ).length;
+  if (totalTasks === 0) return { days: 0, activeTasks: 0, totalTasks: 0 };
+  if (tasks.some((task) => evaluateStreak(task, logs, todayKey).status === "broken")) {
+    return { days: 0, activeTasks, totalTasks };
+  }
+
+  const earliest = tasks.reduce(
+    (min, task) => (task.createdOn < min ? task.createdOn : min),
+    tasks[0].createdOn
+  );
+  let days = 0;
+  let cursor = todayKey;
+  while (cursor >= earliest) {
+    const obligated = tasks.filter((task) => hasHardObligation(task, cursor));
+    if (obligated.length === 0) {
+      cursor = toDayKey(subDays(fromDayKey(cursor), 1));
+      continue;
+    }
+    const allMet = obligated.every((task) => scoreDay(task, logs, cursor).met);
+    if (!allMet) {
+      if (cursor === todayKey) {
+        cursor = toDayKey(subDays(fromDayKey(cursor), 1));
+        continue;
+      }
+      break;
+    }
+    days += 1;
+    cursor = toDayKey(subDays(fromDayKey(cursor), 1));
+  }
+  return { days, activeTasks, totalTasks };
+}
+
 export function nextTaskId(tasks: Task[]): number {
   let max = 0;
   for (const task of tasks) {
