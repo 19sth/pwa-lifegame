@@ -1,0 +1,15 @@
+{
+  "files": {
+    "main.css": "/pwa-lifegame/static/css/main.51d0bd01.css",
+    "main.js": "/pwa-lifegame/static/js/main.1248bdf3.js",
+    "static/js/453.70354ab1.chunk.js": "/pwa-lifegame/static/js/453.70354ab1.chunk.js",
+    "index.html": "/pwa-lifegame/index.html",
+    "main.51d0bd01.css.map": "/pwa-lifegame/static/css/main.51d0bd01.css.map",
+    "main.1248bdf3.js.map": "/pwa-lifegame/static/js/main.1248bdf3.js.map",
+    "453.70354ab1.chunk.js.map": "/pwa-lifegame/static/js/453.70354ab1.chunk.js.map"
+  },
+  "entrypoints": [
+    "static/css/main.51d0bd01.css",
+    "static/js/main.1248bdf3.js"
+  ]
+}
