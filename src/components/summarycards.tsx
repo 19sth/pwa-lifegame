@@ -19,9 +19,12 @@ export default function SummaryCards({
     streak.days === 0 ? "No streak yet" : streak.days === 1 ? "day" : "days";
 
   return (
-    <div className="grid grid-cols-2 gap-2">
-      <div className="rounded-lg border border-gray-200 bg-white overflow-hidden" data-testid="success-summary">
-        <div className="p-3">
+    <div className="grid grid-cols-2 gap-2 items-stretch">
+      <div
+        className="rounded-lg border border-gray-200 bg-white overflow-hidden flex flex-col"
+        data-testid="success-summary"
+      >
+        <div className="p-3 flex-1">
           <div className="text-xs text-gray-500">Success</div>
           <div className="text-4xl font-bold leading-none mt-1">
             {success.percent === null ? "—" : `${success.percent}%`}
@@ -30,8 +33,11 @@ export default function SummaryCards({
         </div>
         <div className="h-1 bg-yellow-300" />
       </div>
-      <div className="rounded-lg border border-gray-200 bg-white overflow-hidden" data-testid="streak-summary">
-        <div className="p-3">
+      <div
+        className="rounded-lg border border-gray-200 bg-white overflow-hidden flex flex-col"
+        data-testid="streak-summary"
+      >
+        <div className="p-3 flex-1">
           <div className="text-xs text-gray-500">Streak</div>
           <div className="text-4xl font-bold leading-none mt-1">{streak.days}</div>
           <div className="text-sm text-gray-600 mt-2">{streakDetail}</div>
