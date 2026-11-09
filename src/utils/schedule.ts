@@ -209,20 +209,31 @@ export function metPartCount(score: DayScore): number {
   return score.subtasks.filter((subtask) => subtask.met).length;
 }
 
-export type DotKind = "none" | "off" | "done" | "today" | "missed" | "optional";
+export type DotKind = "none" | "off" | "done" | "today" | "missed" | "optional" | "frozen";
 
-export function dotKind(task: Task, score: DayScore, todayKey: string): DotKind {
+export function dotKind(
+  task: Task,
+  score: DayScore,
+  todayKey: string,
+  frozenDates?: readonly string[]
+): DotKind {
   if (score.date < task.createdOn) return "none";
   if (task.schedule.kind !== "nPerWeek" && !score.scheduled) return "off";
   if (score.met) return "done";
+  if (frozenDates?.includes(score.date)) return "frozen";
   if (score.date === todayKey) return "today";
   if (score.date > todayKey) return "none";
   if (task.schedule.kind === "nPerWeek") return "optional";
   return "missed";
 }
 
-export function dotLabel(task: Task, score: DayScore, todayKey: string): string {
-  const kind = dotKind(task, score, todayKey);
+export function dotLabel(
+  task: Task,
+  score: DayScore,
+  todayKey: string,
+  frozenDates?: readonly string[]
+): string {
+  const kind = dotKind(task, score, todayKey, frozenDates);
   const day = format(fromDayKey(score.date), "EEE, MMM d");
   const names: Record<DotKind, string> = {
     none: "Not tracked",
@@ -231,6 +242,7 @@ export function dotLabel(task: Task, score: DayScore, todayKey: string): string 
     today: "Today",
     missed: "Missed",
     optional: "Not logged",
+    frozen: "Frozen",
   };
   return `${day}: ${names[kind]}`;
 }
@@ -257,6 +269,70 @@ export interface Streak {
   current: number;
   previous: number;
   brokenOn: string | null;
+  /** Freezes currently held. Derived by replaying history, never stored. */
+  freezes: number;
+  /**
+   * Days a freeze covered, oldest first.
+   * For a weekly task these are the Mondays of the weeks a freeze saved.
+   */
+  frozenDates: string[];
+}
+
+/** Replay rules: begin with one freeze, earn one per clean streak week, hold at most three. */
+const FREEZE_START = 1;
+const FREEZE_CAP = 3;
+const FREEZE_EARN_EVERY = 7;
+
+interface FreezeWalk {
+  freezes: number;
+  earned: number;
+  current: number;
+  frozenDates: string[];
+}
+
+function freshWalk(): FreezeWalk {
+  return { freezes: FREEZE_START, earned: 0, current: 0, frozenDates: [] };
+}
+
+function noteSuccess(walk: FreezeWalk) {
+  walk.current += 1;
+  walk.earned += 1;
+  if (walk.earned >= FREEZE_EARN_EVERY) {
+    walk.freezes = Math.min(FREEZE_CAP, walk.freezes + 1);
+    walk.earned = 0;
+  }
+}
+
+/** @returns true when the miss breaks the streak. */
+function noteMiss(walk: FreezeWalk, dateKey: string): boolean {
+  if (walk.freezes <= 0) return true;
+  walk.freezes -= 1;
+  walk.earned = 0;
+  walk.frozenDates.push(dateKey);
+  return false;
+}
+
+function streakFromWalk(walk: FreezeWalk, unit: Streak["unit"], brokenOn: string | null): Streak {
+  if (brokenOn) {
+    return {
+      status: "broken",
+      unit,
+      current: 0,
+      previous: walk.current,
+      brokenOn,
+      freezes: 0,
+      frozenDates: walk.frozenDates,
+    };
+  }
+  return {
+    status: walk.current > 0 ? "active" : "new",
+    unit,
+    current: walk.current,
+    previous: 0,
+    brokenOn: null,
+    freezes: walk.freezes,
+    frozenDates: walk.frozenDates,
+  };
 }
 
 function eachDay(fromKey: string, toKey: string): string[] {
@@ -272,38 +348,21 @@ function eachDay(fromKey: string, toKey: string): string[] {
 
 function evaluateDailyStreak(task: Task, logs: CompletionLog[], todayKey: string): Streak {
   const start = anchorKey(task);
-  if (start > todayKey) {
-    return { status: "new", unit: "day", current: 0, previous: 0, brokenOn: null };
-  }
+  if (start > todayKey) return streakFromWalk(freshWalk(), "day", null);
   const scheduled = eachDay(start, todayKey)
     .map((key) => ({ key, score: scoreDay(task, logs, key) }))
     .filter((day) => day.score.scheduled);
-  const past = scheduled.filter((day) => day.key < todayKey);
-  const firstMiss = past.find((day) => !day.score.met);
-  if (firstMiss) {
-    const previous = past.filter((day) => day.key < firstMiss.key && day.score.met).length;
-    return {
-      status: "broken",
-      unit: "day",
-      current: 0,
-      previous,
-      brokenOn: firstMiss.key,
-    };
+  const walk = freshWalk();
+  for (const item of scheduled) {
+    if (item.score.met) {
+      noteSuccess(walk);
+      continue;
+    }
+    // Today can still be logged, so it neither counts nor spends a freeze.
+    if (item.key === todayKey) continue;
+    if (noteMiss(walk, item.key)) return streakFromWalk(walk, "day", item.key);
   }
-  let current = 0;
-  for (let i = scheduled.length - 1; i >= 0; i--) {
-    const item = scheduled[i];
-    if (item.key === todayKey && !item.score.met) continue;
-    if (!item.score.met) break;
-    current += 1;
-  }
-  return {
-    status: current > 0 ? "active" : "new",
-    unit: "day",
-    current,
-    previous: 0,
-    brokenOn: null,
-  };
+  return streakFromWalk(walk, "day", null);
 }
 
 export interface WeekResult {
@@ -366,41 +425,20 @@ function weeksCovering(anchor: string, todayKey: string): Date[] {
 
 function evaluateWeeklyStreak(task: Task, logs: CompletionLog[], todayKey: string): Streak {
   const anchor = anchorKey(task);
-  if (anchor > todayKey) {
-    return { status: "new", unit: "week", current: 0, previous: 0, brokenOn: null };
-  }
+  if (anchor > todayKey) return streakFromWalk(freshWalk(), "week", null);
   const weeks = weeksCovering(anchor, todayKey).map((weekStart) =>
     evaluateWeek(task, logs, weekStart, todayKey, anchor)
   );
-  const firstFailIndex = weeks.findIndex((week) => week.state === "fail");
-  if (firstFailIndex >= 0) {
-    let previous = 0;
-    for (let i = firstFailIndex - 1; i >= 0; i--) {
-      if (weeks[i].state === "success") previous += 1;
-      else if (weeks[i].state === "ignored" || weeks[i].state === "open") continue;
-      else break;
+  const walk = freshWalk();
+  for (const week of weeks) {
+    if (week.state === "success") {
+      noteSuccess(walk);
+      continue;
     }
-    return {
-      status: "broken",
-      unit: "week",
-      current: 0,
-      previous,
-      brokenOn: weeks[firstFailIndex].weekStart,
-    };
+    if (week.state === "open" || week.state === "ignored") continue;
+    if (noteMiss(walk, week.weekStart)) return streakFromWalk(walk, "week", week.weekStart);
   }
-  let current = 0;
-  for (let i = weeks.length - 1; i >= 0; i--) {
-    if (weeks[i].state === "success") current += 1;
-    else if (weeks[i].state === "open" || weeks[i].state === "ignored") continue;
-    else break;
-  }
-  return {
-    status: current > 0 ? "active" : "new",
-    unit: "week",
-    current,
-    previous: 0,
-    brokenOn: null,
-  };
+  return streakFromWalk(walk, "week", null);
 }
 
 export function evaluateStreak(task: Task, logs: CompletionLog[], todayKey: string): Streak {
@@ -557,11 +595,10 @@ export function streakSummary(
   todayKey: string
 ): StreakSummary {
   const totalTasks = tasks.length;
-  const activeTasks = tasks.filter(
-    (task) => evaluateStreak(task, logs, todayKey).status === "active"
-  ).length;
+  const streaks = new Map(tasks.map((task) => [task.id, evaluateStreak(task, logs, todayKey)]));
+  const activeTasks = tasks.filter((task) => streaks.get(task.id)?.status === "active").length;
   if (totalTasks === 0) return { days: 0, activeTasks: 0, totalTasks: 0 };
-  if (tasks.some((task) => evaluateStreak(task, logs, todayKey).status === "broken")) {
+  if (tasks.some((task) => streaks.get(task.id)?.status === "broken")) {
     return { days: 0, activeTasks, totalTasks };
   }
 
@@ -572,23 +609,59 @@ export function streakSummary(
   let days = 0;
   let cursor = todayKey;
   while (cursor >= earliest) {
-    const obligated = tasks.filter((task) => hasHardObligation(task, cursor));
+    const obligated: Task[] = [];
+    for (const task of tasks) {
+      if (hasHardObligation(task, cursor)) obligated.push(task);
+    }
     if (obligated.length === 0) {
       cursor = toDayKey(subDays(fromDayKey(cursor), 1));
       continue;
     }
-    const allMet = obligated.every((task) => scoreDay(task, logs, cursor).met);
+    let allMet = true;
+    let covered = true;
+    for (const task of obligated) {
+      const met = scoreDay(task, logs, cursor).met;
+      if (!met) allMet = false;
+      if (!met && !streaks.get(task.id)?.frozenDates.includes(cursor)) covered = false;
+    }
     if (!allMet) {
       if (cursor === todayKey) {
         cursor = toDayKey(subDays(fromDayKey(cursor), 1));
         continue;
       }
-      break;
+      if (!covered) break;
+      cursor = toDayKey(subDays(fromDayKey(cursor), 1));
+      continue;
     }
     days += 1;
     cursor = toDayKey(subDays(fromDayKey(cursor), 1));
   }
   return { days, activeTasks, totalTasks };
+}
+
+export function yesterdayKey(todayKey: string): string {
+  return toDayKey(subDays(fromDayKey(todayKey), 1));
+}
+
+/** Yesterday is the only day that can be filled in after the fact. */
+export function canBackfillDate(task: Task, dateKey: string, todayKey: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateKey) || !/^\d{4}-\d{2}-\d{2}$/.test(todayKey)) return false;
+  if (dateKey !== yesterdayKey(todayKey)) return false;
+  if (dateKey < task.createdOn) return false;
+  if (task.schedule.kind === "weekdays") {
+    return isDayScheduled(task.schedule, fromDayKey(dateKey));
+  }
+  return true;
+}
+
+export function yesterdayBackfill(
+  task: Task,
+  todayKey: string,
+  dateKey: string,
+  count: number
+): { taskId: number; subtaskId: null; date: string; count: number } | null {
+  if (!canBackfillDate(task, dateKey, todayKey)) return null;
+  return { taskId: task.id, subtaskId: null, date: dateKey, count };
 }
 
 export function nextTaskId(tasks: Task[]): number {

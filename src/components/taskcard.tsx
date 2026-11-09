@@ -21,6 +21,7 @@ import {
 import DayDots from "./daydots";
 import LogControl from "./logcontrol";
 import StreakBlock from "./streakblock";
+import YesterdayBackfill from "./yesterdaybackfill";
 
 export default function TaskCard({
   task,
@@ -108,7 +109,13 @@ export default function TaskCard({
         </div>
       ) : null}
 
-      <DayDots task={task} scores={recentScores(task, logs, todayKey, 14)} todayKey={todayKey} />
+      <DayDots
+        task={task}
+        scores={recentScores(task, logs, todayKey, 14)}
+        todayKey={todayKey}
+        frozenDates={streak.unit === "day" ? streak.frozenDates : []}
+      />
+      <YesterdayBackfill task={task} logs={logs} todayKey={todayKey} />
 
       {allowLog && task.subtasks.length > 0 ? (
         <div className="mt-3 border-t border-gray-100 pt-2">

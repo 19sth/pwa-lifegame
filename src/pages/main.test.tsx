@@ -76,6 +76,9 @@ describe("main screen", () => {
     expect(screen.getByTestId("streak-summary")).toHaveTextContent("No streak yet");
     expect(screen.getByTestId("streak-summary")).toHaveTextContent("0 of 1 tasks on a streak");
 
+    expect(screen.queryByTestId("yesterday-backfill")).not.toBeInTheDocument();
+    expect(screen.getByTestId("freeze-count")).toHaveTextContent("1 freeze");
+
     await userEvent.click(screen.getByRole("button", { name: "Log one Floss" }));
     expect(screen.getByText("Done today")).toBeInTheDocument();
     expect(screen.getByTestId("success-summary")).toHaveTextContent("100%");
@@ -84,8 +87,8 @@ describe("main screen", () => {
   });
 
   it("shows a broken streak, the length that was lost, and a way to start again", async () => {
-    const created = toDayKey(subDays(new Date(), 3));
-    const second = toDayKey(subDays(new Date(), 2));
+    const created = toDayKey(subDays(new Date(), 4));
+    const second = toDayKey(subDays(new Date(), 3));
     const item: Task = {
       id: 1,
       name: "Read",
@@ -117,5 +120,42 @@ describe("main screen", () => {
     await userEvent.click(screen.getByRole("button", { name: "Start again" }));
     expect(screen.queryByTestId("streak-broken")).not.toBeInTheDocument();
     expect(screen.getAllByText("No streak yet").length).toBeGreaterThan(0);
+    expect(screen.getByTestId("freeze-count")).toHaveTextContent("1 freeze");
+  });
+
+  it("shows a frozen day and fills yesterday back in", async () => {
+    const created = toDayKey(subDays(new Date(), 2));
+    const yesterday = toDayKey(subDays(new Date(), 1));
+    const item: Task = {
+      id: 1,
+      name: "Floss",
+      color: "#fff4b3",
+      createdOn: created,
+      schedule: { kind: "daily" },
+      timesPerDay: 1,
+      subtasks: [],
+      streakAnchor: null,
+    };
+    const store = renderMain(
+      taskState([item], [{ taskId: 1, subtaskId: null, date: created, count: 1 }])
+    );
+
+    expect(screen.getByText("1 day")).toBeInTheDocument();
+    expect(screen.getByTestId("freeze-count")).toHaveTextContent("0 freezes");
+    expect(screen.getByLabelText(/Frozen/)).toBeInTheDocument();
+    expect(screen.getByTestId("yesterday-backfill")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Log one Floss yesterday" }));
+
+    expect(store.getState().logs.logs).toContainEqual({
+      taskId: 1,
+      subtaskId: null,
+      date: yesterday,
+      count: 1,
+    });
+    expect(screen.getByText("2 days")).toBeInTheDocument();
+    expect(screen.getByTestId("freeze-count")).toHaveTextContent("1 freeze");
+    expect(screen.queryByLabelText(/Frozen/)).not.toBeInTheDocument();
+    expect(screen.getByTestId("yesterday-backfill")).toHaveTextContent("Filled in");
   });
 });

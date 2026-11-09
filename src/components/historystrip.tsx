@@ -9,6 +9,7 @@ import {
 
 function cardClass(kind: string) {
   if (kind === "missed") return "bg-red-50";
+  if (kind === "frozen") return "bg-sky-100";
   if (kind === "done") return "bg-yellow-100";
   if (kind === "today") return "bg-white border border-black";
   return "bg-gray-100";
@@ -16,6 +17,7 @@ function cardClass(kind: string) {
 
 function cardLabel(kind: string) {
   if (kind === "missed") return "Missed";
+  if (kind === "frozen") return "Frozen";
   if (kind === "done") return "Done";
   if (kind === "today") return "Today";
   if (kind === "off") return "Off";
@@ -27,10 +29,12 @@ export default function HistoryStrip({
   task,
   scores,
   todayKey,
+  frozenDates = [],
 }: {
   task: Task;
   scores: DayScore[];
   todayKey: string;
+  frozenDates?: readonly string[];
 }) {
   const ref = useRef<HTMLDivElement>(null);
 
@@ -44,7 +48,7 @@ export default function HistoryStrip({
       <div className="w-full overflow-x-auto border-t-2 border-b-2 py-3" ref={ref}>
         <div className="flex no-wrap">
           {scores.map((score) => {
-            const kind = dotKind(task, score, todayKey);
+            const kind = dotKind(task, score, todayKey, frozenDates);
             if (kind === "none") return null;
             const date = fromDayKey(score.date);
             return (
@@ -57,7 +61,7 @@ export default function HistoryStrip({
                 <div className="text-xs">{format(date, "MMM d")}</div>
                 <div
                   className={`text-xs mt-3 font-semibold ${
-                    kind === "missed" ? "text-red-800" : ""
+                    kind === "missed" ? "text-red-800" : kind === "frozen" ? "text-sky-800" : ""
                   }`}
                 >
                   {cardLabel(kind)}
@@ -69,8 +73,8 @@ export default function HistoryStrip({
       </div>
       <div className="text-xs text-gray-500 mt-2">
         {task.schedule.kind === "nPerWeek"
-          ? "Days you log count toward the week. A missed week stays broken until you start again."
-          : "Red days are scheduled days that were missed. The streak stays broken until you start again."}
+          ? "Days you log count toward the week. A failed week spends a freeze if you have one. With none left, the streak stays broken until you start again."
+          : "Blue days used a streak freeze. With no freezes left, a miss stays broken until you start again."}
       </div>
     </div>
   );

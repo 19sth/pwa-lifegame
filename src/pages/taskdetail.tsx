@@ -17,6 +17,7 @@ import HistoryStrip from "../components/historystrip";
 import LogControl from "../components/logcontrol";
 import MuTakoz from "../components/mutakoz";
 import StreakBlock from "../components/streakblock";
+import YesterdayBackfill from "../components/yesterdaybackfill";
 import { setCompletion, removeLogsForTask } from "../redux/sliceLogs";
 import { updatePageState } from "../redux/slicePage";
 import { removeTask, startAgain, updateTask } from "../redux/sliceTasks";
@@ -126,7 +127,12 @@ export default function TaskDetail() {
       </Link>
 
       <MuTakoz height="1rem" />
-      <HistoryStrip task={task} scores={history} todayKey={today} />
+      <HistoryStrip
+        task={task}
+        scores={history}
+        todayKey={today}
+        frozenDates={streak.unit === "day" ? streak.frozenDates : []}
+      />
 
       <div className="text-3xl font-semibold my-5 w-full break-words">
         <span style={{ borderBottom: `5px solid ${task.color}` }}>{task.name}</span>
@@ -145,6 +151,8 @@ export default function TaskDetail() {
             : undefined
         }
       />
+
+      <YesterdayBackfill task={task} logs={logs} todayKey={today} />
 
       <MuTakoz height="1rem" />
 

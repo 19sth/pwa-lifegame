@@ -1,7 +1,8 @@
-import { getDay } from "date-fns";
+import { addDays, getDay } from "date-fns";
 import {
   CompletionLog,
   Task,
+  canBackfillDate,
   cleanSchedule,
   dotKind,
   evaluateStreak,
@@ -11,7 +12,9 @@ import {
   streakCopy,
   streakSummary,
   successSummary,
+  toDayKey,
   weekLine,
+  yesterdayBackfill,
   currentWeek,
 } from "./schedule";
 
@@ -29,6 +32,26 @@ function task(partial: Partial<Task> & Pick<Task, "createdOn" | "schedule">): Ta
 
 function log(date: string, extra: Partial<CompletionLog> = {}): CompletionLog {
   return { taskId: 1, subtaskId: null, date, count: 1, ...extra };
+}
+
+function dailyLogs(start: string, count: number, taskId = 1): CompletionLog[] {
+  const logs: CompletionLog[] = [];
+  let cursor = fromDayKey(start);
+  for (let i = 0; i < count; i++) {
+    logs.push(log(toDayKey(cursor), { taskId }));
+    cursor = addDays(cursor, 1);
+  }
+  return logs;
+}
+
+function weekStarts(start: string, count: number): string[] {
+  const keys: string[] = [];
+  let cursor = fromDayKey(start);
+  for (let i = 0; i < count; i++) {
+    keys.push(toDayKey(cursor));
+    cursor = addDays(cursor, 7);
+  }
+  return keys;
 }
 
 describe("sample calendar", () => {
@@ -140,14 +163,16 @@ describe("daily streaks", () => {
   it("names a broken streak instead of showing zero", () => {
     const streak = evaluateStreak(
       item,
-      [log("2026-11-01"), log("2026-11-02"), log("2026-11-03"), log("2026-11-05")],
+      [log("2026-11-01"), log("2026-11-02"), log("2026-11-03")],
       "2026-11-06"
     );
     expect(streak).toMatchObject({
       status: "broken",
       current: 0,
       previous: 3,
-      brokenOn: "2026-11-04",
+      brokenOn: "2026-11-05",
+      freezes: 0,
+      frozenDates: ["2026-11-04"],
     });
     const copy = streakCopy(streak);
     expect(copy.headline).toBe("Streak broken");
@@ -157,21 +182,24 @@ describe("daily streaks", () => {
   });
 
   it("keeps the break until the anchor moves, even if later days are logged", () => {
-    const broken = evaluateStreak(
-      item,
-      [log("2026-11-01"), log("2026-11-03")],
-      "2026-11-04"
-    );
+    const broken = evaluateStreak(item, [log("2026-11-01")], "2026-11-04");
     expect(broken.status).toBe("broken");
     expect(broken.previous).toBe(1);
-    expect(broken.brokenOn).toBe("2026-11-02");
+    expect(broken.brokenOn).toBe("2026-11-03");
+    expect(broken.frozenDates).toEqual(["2026-11-02"]);
 
     const restarted = evaluateStreak(
       { ...item, streakAnchor: "2026-11-04" },
-      [log("2026-11-01"), log("2026-11-03"), log("2026-11-04")],
+      [log("2026-11-01"), log("2026-11-04")],
       "2026-11-04"
     );
-    expect(restarted).toMatchObject({ status: "active", current: 1, brokenOn: null });
+    expect(restarted).toMatchObject({
+      status: "active",
+      current: 1,
+      brokenOn: null,
+      freezes: 1,
+      frozenDates: [],
+    });
   });
 
   it("ignores days that are not on the weekday schedule", () => {
@@ -188,22 +216,25 @@ describe("daily streaks", () => {
     expect(dotKind(weekdays, scoreDay(weekdays, [], "2026-11-03"), "2026-11-07")).toBe("off");
   });
 
-  it("breaks on a missed weekday and not on the days around it", () => {
+  it("breaks on a missed weekday once the freeze is spent", () => {
     const weekdays = task({
       createdOn: "2026-11-02",
       schedule: { kind: "weekdays", weekdays: [1, 3, 5] },
     });
-    const streak = evaluateStreak(
-      weekdays,
-      [log("2026-11-02"), log("2026-11-04")],
-      "2026-11-07"
-    );
+    const streak = evaluateStreak(weekdays, [log("2026-11-02")], "2026-11-07");
     expect(streak).toMatchObject({
       status: "broken",
-      previous: 2,
+      previous: 1,
       brokenOn: "2026-11-06",
+      frozenDates: ["2026-11-04"],
     });
-    expect(dotKind(weekdays, scoreDay(weekdays, [], "2026-11-06"), "2026-11-07")).toBe("missed");
+    expect(dotKind(weekdays, scoreDay(weekdays, [], "2026-11-03"), "2026-11-07")).toBe("off");
+    expect(
+      dotKind(weekdays, scoreDay(weekdays, [], "2026-11-04"), "2026-11-07", streak.frozenDates)
+    ).toBe("frozen");
+    expect(
+      dotKind(weekdays, scoreDay(weekdays, [], "2026-11-06"), "2026-11-07", streak.frozenDates)
+    ).toBe("missed");
   });
 });
 
@@ -234,21 +265,40 @@ describe("days per week", () => {
     expect(currentWeek(item, [], "2026-11-06")?.state).toBe("open");
   });
 
-  it("breaks as soon as the week can no longer be saved", () => {
+  it("spends a freeze when the week can no longer be saved", () => {
     const item = task({
       createdOn: "2026-11-02",
       schedule: { kind: "nPerWeek", daysPerWeek: 3 },
     });
     const streak = evaluateStreak(item, [], "2026-11-07");
     expect(streak).toMatchObject({
+      status: "new",
+      unit: "week",
+      current: 0,
+      freezes: 0,
+      brokenOn: null,
+      frozenDates: ["2026-11-02"],
+    });
+    expect(streakCopy(streak).headline).toBe("No streak yet");
+  });
+
+  it("breaks once a second week fails with no freeze left", () => {
+    const item = task({
+      createdOn: "2026-11-02",
+      schedule: { kind: "nPerWeek", daysPerWeek: 3 },
+    });
+    const streak = evaluateStreak(item, [], "2026-11-16");
+    expect(streak).toMatchObject({
       status: "broken",
       unit: "week",
       previous: 0,
-      brokenOn: "2026-11-02",
+      brokenOn: "2026-11-09",
+      freezes: 0,
+      frozenDates: ["2026-11-02"],
     });
     const copy = streakCopy(streak);
     expect(copy.headline).toBe("Streak broken");
-    expect(copy.detail).toContain("week of Nov 2");
+    expect(copy.detail).toContain("week of Nov 9");
   });
 
   it("does not judge a partial first week that cannot fit the quota", () => {
@@ -286,7 +336,8 @@ describe("days per week", () => {
     );
     expect(streak.status).toBe("broken");
     expect(streak.previous).toBe(0);
-    expect(streak.brokenOn).toBe("2026-11-02");
+    expect(streak.brokenOn).toBe("2026-11-09");
+    expect(streak.frozenDates).toEqual(["2026-11-02"]);
   });
 });
 
@@ -428,10 +479,20 @@ describe("streakSummary", () => {
 
   it("is zero while any task streak is broken, then counts the run after a restart", () => {
     const daily = task({ createdOn: "2026-11-02", schedule: { kind: "daily" } });
-    const logs = [log("2026-11-02"), log("2026-11-03"), log("2026-11-05"), log("2026-11-06")];
+    const logs = [log("2026-11-02"), log("2026-11-05"), log("2026-11-06")];
     expect(streakSummary([daily], logs, "2026-11-06").days).toBe(0);
     const restarted = { ...daily, streakAnchor: "2026-11-05" };
     expect(streakSummary([restarted], logs, "2026-11-06").days).toBe(2);
+  });
+
+  it("keeps counting across a day a freeze covered", () => {
+    const daily = task({ createdOn: "2026-11-02", schedule: { kind: "daily" } });
+    const logs = [log("2026-11-02"), log("2026-11-03"), log("2026-11-05")];
+    expect(streakSummary([daily], logs, "2026-11-05")).toEqual({
+      days: 3,
+      activeTasks: 1,
+      totalTasks: 1,
+    });
   });
 
   it("is zero when an n-per-week task has already broken", () => {
@@ -442,14 +503,184 @@ describe("streakSummary", () => {
       createdOn: "2026-11-02",
       schedule: { kind: "nPerWeek", daysPerWeek: 6 },
     });
-    const logs = logsFor(1, [
-      "2026-11-02",
-      "2026-11-03",
-      "2026-11-04",
-      "2026-11-05",
-      "2026-11-06",
-      "2026-11-07",
-    ]);
-    expect(streakSummary([daily, flexible], logs, "2026-11-07").days).toBe(0);
+    const logs = dailyLogs("2026-11-02", 15);
+    expect(streakSummary([daily, flexible], logs, "2026-11-16").days).toBe(0);
+  });
+});
+
+describe("streak freezes", () => {
+  const item = task({ createdOn: "2026-11-01", schedule: { kind: "daily" } });
+
+  it("starts with one freeze", () => {
+    expect(evaluateStreak(item, [], "2026-11-01")).toMatchObject({
+      status: "new",
+      current: 0,
+      freezes: 1,
+      frozenDates: [],
+    });
+  });
+
+  it("spends the starting freeze on the first missed day and keeps the streak", () => {
+    const streak = evaluateStreak(
+      item,
+      [log("2026-11-01"), log("2026-11-02"), log("2026-11-03"), log("2026-11-05")],
+      "2026-11-06"
+    );
+    expect(streak).toMatchObject({
+      status: "active",
+      current: 4,
+      freezes: 0,
+      brokenOn: null,
+      frozenDates: ["2026-11-04"],
+    });
+    expect(
+      dotKind(item, scoreDay(item, [], "2026-11-04"), "2026-11-06", streak.frozenDates)
+    ).toBe("frozen");
+  });
+
+  it("does not spend a freeze on today while it is still open", () => {
+    const streak = evaluateStreak(item, [log("2026-11-01"), log("2026-11-02")], "2026-11-03");
+    expect(streak).toMatchObject({ status: "active", current: 2, freezes: 1, frozenDates: [] });
+  });
+
+  it("earns one freeze for every 7 successful days and caps at 3", () => {
+    expect(evaluateStreak(item, dailyLogs("2026-11-01", 6), "2026-11-06").freezes).toBe(1);
+    expect(evaluateStreak(item, dailyLogs("2026-11-01", 7), "2026-11-07")).toMatchObject({
+      status: "active",
+      current: 7,
+      freezes: 2,
+    });
+    expect(evaluateStreak(item, dailyLogs("2026-11-01", 14), "2026-11-14").freezes).toBe(3);
+    expect(evaluateStreak(item, dailyLogs("2026-11-01", 21), "2026-11-21")).toMatchObject({
+      status: "active",
+      current: 21,
+      freezes: 3,
+      frozenDates: [],
+    });
+  });
+
+  it("does not earn a freeze from days split by a spent freeze", () => {
+    const logs = [...dailyLogs("2026-11-01", 6), ...dailyLogs("2026-11-08", 6)];
+    expect(evaluateStreak(item, logs, "2026-11-13")).toMatchObject({
+      status: "active",
+      current: 12,
+      freezes: 0,
+      frozenDates: ["2026-11-07"],
+    });
+  });
+
+  it("covers as many consecutive misses as there are freezes, then breaks", () => {
+    const logs = dailyLogs("2026-11-01", 14);
+    const covered = evaluateStreak(item, logs, "2026-11-18");
+    expect(covered).toMatchObject({
+      status: "active",
+      current: 14,
+      freezes: 0,
+      frozenDates: ["2026-11-15", "2026-11-16", "2026-11-17"],
+    });
+
+    const broken = evaluateStreak(item, logs, "2026-11-19");
+    expect(broken).toMatchObject({
+      status: "broken",
+      previous: 14,
+      brokenOn: "2026-11-18",
+      freezes: 0,
+      frozenDates: ["2026-11-15", "2026-11-16", "2026-11-17"],
+    });
+    expect(streakCopy(broken).headline).toBe("Streak broken");
+  });
+
+  it("gives the freeze back when the missed day is logged", () => {
+    const missed = evaluateStreak(item, [log("2026-11-01"), log("2026-11-02")], "2026-11-04");
+    expect(missed).toMatchObject({ freezes: 0, frozenDates: ["2026-11-03"], current: 2 });
+    const filled = evaluateStreak(
+      item,
+      [log("2026-11-01"), log("2026-11-02"), log("2026-11-03")],
+      "2026-11-04"
+    );
+    expect(filled).toMatchObject({
+      status: "active",
+      current: 3,
+      freezes: 1,
+      frozenDates: [],
+    });
+  });
+
+  it("earns a freeze after seven successful weeks and spends it on a failed week", () => {
+    const weekly = task({
+      createdOn: "2026-11-02",
+      schedule: { kind: "nPerWeek", daysPerWeek: 1 },
+    });
+    const mondays = weekStarts("2026-11-02", 13);
+    const six = evaluateStreak(
+      weekly,
+      mondays.slice(0, 6).map((date) => log(date)),
+      mondays[5]
+    );
+    expect(six).toMatchObject({ status: "active", current: 6, freezes: 1 });
+
+    const seven = evaluateStreak(
+      weekly,
+      mondays.slice(0, 7).map((date) => log(date)),
+      mondays[6]
+    );
+    expect(seven).toMatchObject({ status: "active", current: 7, freezes: 2, frozenDates: [] });
+
+    const logs = [...mondays.slice(0, 6), ...mondays.slice(7, 13)].map((date) => log(date));
+    const split = evaluateStreak(weekly, logs, mondays[12]);
+    expect(split).toMatchObject({
+      status: "active",
+      current: 12,
+      freezes: 0,
+      frozenDates: [mondays[6]],
+    });
+  });
+});
+
+describe("yesterday backfill", () => {
+  const today = "2026-11-06";
+  const item = task({ createdOn: "2026-11-02", schedule: { kind: "daily" } });
+
+  it("allows yesterday and rejects older, current, and future days", () => {
+    expect(canBackfillDate(item, "2026-11-05", today)).toBe(true);
+    expect(canBackfillDate(item, "2026-11-04", today)).toBe(false);
+    expect(canBackfillDate(item, "2026-11-01", today)).toBe(false);
+    expect(canBackfillDate(item, "2026-11-06", today)).toBe(false);
+    expect(canBackfillDate(item, "2026-11-07", today)).toBe(false);
+    expect(canBackfillDate(item, "2026-11-05", "not-a-day")).toBe(false);
+  });
+
+  it("rejects yesterday when the task did not exist yet", () => {
+    const createdToday = task({ createdOn: today, schedule: { kind: "daily" } });
+    expect(canBackfillDate(createdToday, "2026-11-05", today)).toBe(false);
+  });
+
+  it("rejects an unscheduled weekday and allows a scheduled one", () => {
+    const weekdays = task({
+      createdOn: "2026-11-02",
+      schedule: { kind: "weekdays", weekdays: [1, 3, 5] },
+    });
+    expect(canBackfillDate(weekdays, "2026-11-05", "2026-11-06")).toBe(false);
+    expect(canBackfillDate(weekdays, "2026-11-04", "2026-11-05")).toBe(true);
+  });
+
+  it("allows yesterday for a days-per-week task and still rejects older days", () => {
+    const flexible = task({
+      createdOn: "2026-11-02",
+      schedule: { kind: "nPerWeek", daysPerWeek: 2 },
+    });
+    expect(canBackfillDate(flexible, "2026-11-05", today)).toBe(true);
+    expect(canBackfillDate(flexible, "2026-11-03", today)).toBe(false);
+  });
+
+  it("refuses to build a log for an older day", () => {
+    expect(yesterdayBackfill(item, today, "2026-11-04", 1)).toBeNull();
+    expect(yesterdayBackfill(item, today, "2026-11-07", 1)).toBeNull();
+    expect(yesterdayBackfill(item, today, "2026-11-05", 1)).toEqual({
+      taskId: 1,
+      subtaskId: null,
+      date: "2026-11-05",
+      count: 1,
+    });
   });
 });
