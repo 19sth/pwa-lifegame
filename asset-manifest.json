@@ -1,15 +1,15 @@
 {
   "files": {
-    "main.css": "/pwa-lifegame/static/css/main.97cffa40.css",
-    "main.js": "/pwa-lifegame/static/js/main.232e5339.js",
+    "main.css": "/pwa-lifegame/static/css/main.acb5301c.css",
+    "main.js": "/pwa-lifegame/static/js/main.b043f43a.js",
     "static/js/453.70354ab1.chunk.js": "/pwa-lifegame/static/js/453.70354ab1.chunk.js",
     "index.html": "/pwa-lifegame/index.html",
-    "main.97cffa40.css.map": "/pwa-lifegame/static/css/main.97cffa40.css.map",
-    "main.232e5339.js.map": "/pwa-lifegame/static/js/main.232e5339.js.map",
+    "main.acb5301c.css.map": "/pwa-lifegame/static/css/main.acb5301c.css.map",
+    "main.b043f43a.js.map": "/pwa-lifegame/static/js/main.b043f43a.js.map",
     "453.70354ab1.chunk.js.map": "/pwa-lifegame/static/js/453.70354ab1.chunk.js.map"
   },
   "entrypoints": [
-    "static/css/main.97cffa40.css",
-    "static/js/main.232e5339.js"
+    "static/css/main.acb5301c.css",
+    "static/js/main.b043f43a.js"
   ]
 }
